@@ -1,0 +1,1 @@
+"""Decentralized Group Vault."""

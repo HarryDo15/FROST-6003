@@ -5,32 +5,34 @@ threshold `t` of `n` group members cooperate.
 
 ## Layout
 
-| Path               | Purpose                                                         |
-| ------------------ | --------------------------------------------------------------- |
-| `cmd/coordinator`  | Service that orchestrates share distribution and recovery.      |
-| `cmd/vault-cli`    | Member-facing command-line client.                              |
-| `pkg/crypto`       | Threshold primitives (Shamir's Secret Sharing).                 |
-| `pkg/types`        | Domain types shared by the back end and API consumers.          |
+| Path                         | Purpose                                                    |
+| ---------------------------- | ---------------------------------------------------------- |
+| `group_vault/coordinator.py` | Service that orchestrates share distribution and recovery. |
+| `group_vault/vault_cli.py`   | Member-facing command-line client.                         |
+| `group_vault/crypto.py`      | Threshold primitives (Shamir's Secret Sharing).            |
+| `group_vault/types.py`       | Domain types shared by the back end and API consumers.     |
 
 ## Development
 
-Requires Go 1.25+ and [golangci-lint v2](https://golangci-lint.run/).
+Requires Python 3.11+.
 
 ```sh
-go vet ./...
-golangci-lint run   # CI requires 0 issues
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+ruff check . && ruff format --check .   # lint (CI requires 0 issues)
+mypy group_vault                        # type check
 ```
 
-## `pkg/crypto`
+## `group_vault.crypto`
 
-```go
-shares, err := crypto.SplitSecret(secret, t, n) // any t of n shares recover secret
-secret, err := crypto.CombineShares(shares[:t])
+```python
+from group_vault.crypto import split_secret, combine_shares
+
+shares = split_secret(b"my secret", t=3, n=5)  # any 3 of 5 shares recover it
+secret = combine_shares(shares[:3])
 ```
 
-Built on HashiCorp's `vault/shamir` (GF(2^8)). Each share carries a small
-header (version, threshold) and the split payload includes a SHA-256 digest of
-the secret, so supplying fewer than `t` shares, or corrupted or mixed shares,
-returns an error instead of a wrong secret. Errors are exported sentinels
-(`crypto.ErrInsufficientShares`, `crypto.ErrIntegrityCheckFailed`, …) for use
-with `errors.Is`.
+Uses pycryptodome's Shamir's Secret Sharing on a random AES key, with the
+secret itself encrypted under AES-GCM. Too few, corrupted or mixed shares raise
+`SecretSharingError` instead of returning a wrong secret.
