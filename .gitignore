@@ -1,13 +1,11 @@
-# Build output
-/bin/
-/dist/
-
-# Go test artifacts
-*.test
-*.out
-coverage.*
-
-# Editor / OS
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
 .idea/
 .vscode/
 .DS_Store
