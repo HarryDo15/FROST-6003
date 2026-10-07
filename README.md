@@ -17,9 +17,8 @@ threshold `t` of `n` group members cooperate.
 Requires Go 1.25+ and [golangci-lint v2](https://golangci-lint.run/).
 
 ```sh
-go test -race ./...   # unit tests
-go vet ./...          # static checks
-golangci-lint run     # lint (CI requires 0 issues)
+go vet ./...
+golangci-lint run   # CI requires 0 issues
 ```
 
 ## `pkg/crypto`
