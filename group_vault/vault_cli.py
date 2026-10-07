@@ -1,8 +1,3 @@
-"""Vault CLI: will be the member-facing client for the group vault.
-
-Placeholder in Week 1.
-"""
-
 import sys
 
 

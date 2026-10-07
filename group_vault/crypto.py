@@ -1,17 +1,3 @@
-"""Threshold secret sharing for the group vault.
-
-Built on pycryptodome's Shamir's Secret Sharing, which splits 16-byte values.
-To support secrets of any length, ``split_secret`` encrypts the secret with a
-random AES-128 key (AES-GCM) and splits only that key. Each share is:
-
-    version (1) | threshold (1) | index (1) | key share (16) | nonce | ciphertext | tag
-
-Every share carries the same encrypted secret, so any ``t`` shares are enough
-to recover it. With fewer than ``t`` shares the key, and therefore the secret,
-stays hidden. AES-GCM authentication rejects corrupted or mismatched shares
-instead of returning a wrong secret.
-"""
-
 from collections.abc import Sequence
 
 from Crypto.Cipher import AES
@@ -22,7 +8,7 @@ MIN_THRESHOLD = 2
 MAX_SHARES = 255
 
 _VERSION = 1
-_HEADER_LEN = 3  # version, threshold, index
+_HEADER_LEN = 3
 _KEY_LEN = 16
 _NONCE_LEN = 12
 _TAG_LEN = 16
@@ -31,11 +17,10 @@ _MIN_SHARE_LEN = _SEALED_OFFSET + _NONCE_LEN + 1 + _TAG_LEN
 
 
 class SecretSharingError(ValueError):
-    """Raised when a secret cannot be split or reconstructed."""
+    pass
 
 
 def split_secret(secret: bytes, t: int, n: int) -> list[bytes]:
-    """Split ``secret`` into ``n`` shares, any ``t`` of which recover it."""
     if not secret:
         raise SecretSharingError("secret must not be empty")
     if not MIN_THRESHOLD <= t <= n <= MAX_SHARES:
@@ -53,7 +38,6 @@ def split_secret(secret: bytes, t: int, n: int) -> list[bytes]:
 
 
 def combine_shares(shares: Sequence[bytes]) -> bytes:
-    """Recover the secret from at least ``t`` shares made by ``split_secret``."""
     if not shares:
         raise SecretSharingError("no shares provided")
     if any(len(s) < _MIN_SHARE_LEN or s[0] != _VERSION for s in shares):

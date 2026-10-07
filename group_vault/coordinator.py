@@ -1,8 +1,3 @@
-"""Coordinator: will orchestrate share distribution and recovery between vault members.
-
-Placeholder in Week 1.
-"""
-
 import sys
 
 
