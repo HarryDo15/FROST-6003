@@ -7,7 +7,7 @@ name = "group-vault"
 version = "0.1.0"
 description = "Decentralized group vault using threshold secret sharing"
 requires-python = ">=3.11"
-dependencies = ["pycryptodome>=3.24"]
+dependencies = ["pycryptodome>=3.24", "fastapi>=0.150", "uvicorn>=0.54"]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.16", "mypy>=2.4"]
@@ -17,7 +17,7 @@ vault-coordinator = "group_vault.coordinator:main"
 vault-cli = "group_vault.vault_cli:main"
 
 [tool.setuptools]
-packages = ["group_vault"]
+packages = ["group_vault", "group_vault.models"]
 
 [tool.ruff]
 target-version = "py311"
