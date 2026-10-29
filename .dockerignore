@@ -1,0 +1,5 @@
+*
+!pyproject.toml
+!uv.lock
+!group_vault/
+!group_vault/**/*.py
