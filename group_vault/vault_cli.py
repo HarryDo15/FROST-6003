@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Sequence
 
 from group_vault.crypto import MAX_SHARES, MIN_THRESHOLD, split_secret
+from group_vault.daemon import run_daemon
 from group_vault.storage import EncryptedShareStore
 
 
@@ -30,6 +31,12 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify-share", help="Check a stored share")
     verify.add_argument("--vault-id", required=True)
     verify.add_argument("--node-id", required=True)
+    start = commands.add_parser("start", help="Poll coordinator requests (observation only)")
+    start.add_argument("--node-id", required=True)
+    start.add_argument("--coordinator", required=True)
+    start.add_argument("--poll-interval", type=float, default=2.0)
+    start.add_argument("--timeout", type=float, default=5.0)
+    start.add_argument("--once", action="store_true", help="Poll once and exit")
     return parser
 
 
@@ -83,11 +90,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    if args.command == "start":
+        try:
+            return run_daemon(
+                args.coordinator, args.node_id, args.poll_interval, args.timeout, args.once
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+
     if args.command == "init":
         if not MIN_THRESHOLD <= args.threshold <= args.total <= MAX_SHARES:
-            parser.error(
-                f"require {MIN_THRESHOLD} <= threshold <= total <= {MAX_SHARES}"
-            )
+            parser.error(f"require {MIN_THRESHOLD} <= threshold <= total <= {MAX_SHARES}")
         demo_secret = secrets.token_bytes(32)
         shares = split_secret(demo_secret, args.threshold, args.total)
         result = {

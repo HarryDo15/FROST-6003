@@ -52,10 +52,7 @@ class EncryptedShareStore:
         if not passphrase:
             raise ValueError("passphrase must not be empty")
 
-        if self.exists():
-            records = self._read_records(passphrase)
-        else:
-            records = []
+        records = self._read_records(passphrase) if self.exists() else []
 
         record = {
             "vault_id": vault_id,
@@ -63,9 +60,7 @@ class EncryptedShareStore:
             "share": base64.b64encode(share).decode("ascii"),
         }
         records = [
-            item
-            for item in records
-            if item["vault_id"] != vault_id or item["node_id"] != node_id
+            item for item in records if item["vault_id"] != vault_id or item["node_id"] != node_id
         ]
         records.append(record)
         self._write_encrypted(records, passphrase)
@@ -137,9 +132,7 @@ class EncryptedShareStore:
             try:
                 plaintext = cipher.decrypt_and_verify(ciphertext, tag)
             except ValueError as exc:
-                raise ValueError(
-                    "wrong passphrase or encrypted store was modified"
-                ) from exc
+                raise ValueError("wrong passphrase or encrypted store was modified") from exc
             records: Any = json.loads(plaintext)
             if not isinstance(records, list):
                 raise ValueError("encrypted store payload must be a list")
@@ -147,8 +140,7 @@ class EncryptedShareStore:
             checked_records: list[dict[str, str]] = []
             for item in records:
                 if not isinstance(item, dict) or not all(
-                    isinstance(item.get(field), str)
-                    for field in ("vault_id", "node_id", "share")
+                    isinstance(item.get(field), str) for field in ("vault_id", "node_id", "share")
                 ):
                     raise ValueError("encrypted store contains a malformed record")
                 checked_records.append(item)
