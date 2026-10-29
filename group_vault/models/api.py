@@ -13,6 +13,12 @@ def _check_base64(value: str) -> str:
 Base64Str = Annotated[str, AfterValidator(_check_base64)]
 
 
+def _check_partial_signature(value: str) -> str:
+    if len(base64.b64decode(value, validate=True)) in (16, 32):
+        raise ValueError("payload has the size of a raw private key share")
+    return value
+
+
 class SignatureRequest(BaseModel):
     vault_id: str
     payload_to_sign_base64: Base64Str
@@ -22,6 +28,10 @@ class SignatureRequest(BaseModel):
 class SignatureResponse(BaseModel):
     request_id: str
     status: str
+
+
+class SignatureResult(SignatureResponse):
+    signature_base64: str | None = None
 
 
 class PendingRequest(SignatureRequest):
@@ -35,4 +45,4 @@ class PendingRequestsResponse(BaseModel):
 class ShareSubmission(BaseModel):
     request_id: str
     node_id: str
-    partial_signature_base64: Base64Str
+    partial_signature_base64: Annotated[Base64Str, AfterValidator(_check_partial_signature)]

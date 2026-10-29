@@ -37,22 +37,30 @@ def split_secret(secret: bytes, t: int, n: int) -> list[bytes]:
     ]
 
 
-def combine_shares(shares: Sequence[bytes]) -> bytes:
+def validate_shares(shares: Sequence[bytes]) -> None:
     if not shares:
         raise SecretSharingError("no shares provided")
     if any(len(s) < _MIN_SHARE_LEN or s[0] != _VERSION for s in shares):
         raise SecretSharingError("malformed share")
 
     threshold = shares[0][1]
+    if threshold < MIN_THRESHOLD or any(s[2] == 0 for s in shares):
+        raise SecretSharingError("invalid threshold or share index")
     sealed = shares[0][_SEALED_OFFSET:]
     if any(s[1] != threshold or s[_SEALED_OFFSET:] != sealed for s in shares):
         raise SecretSharingError("shares do not belong to the same split")
     if len({s[2] for s in shares}) != len(shares):
         raise SecretSharingError("duplicate share")
+
+
+def combine_shares(shares: Sequence[bytes]) -> bytes:
+    validate_shares(shares)
+    threshold = shares[0][1]
     if len(shares) < threshold:
         raise SecretSharingError(f"not enough shares: have {len(shares)}, need {threshold}")
 
     key = Shamir.combine([(s[2], s[_HEADER_LEN:_SEALED_OFFSET]) for s in shares], ssss=False)
+    sealed = shares[0][_SEALED_OFFSET:]
     nonce = sealed[:_NONCE_LEN]
     ciphertext = sealed[_NONCE_LEN:-_TAG_LEN]
     tag = sealed[-_TAG_LEN:]
