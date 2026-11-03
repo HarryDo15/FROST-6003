@@ -1,0 +1,8 @@
+**
+!pyproject.toml
+!requirements.vault-cli.lock
+!group_vault/
+!group_vault/**
+**/__pycache__/**
+**/*.pyc
+**/.vault/**

@@ -10,14 +10,23 @@ import secrets
 import sys
 import uuid
 from collections.abc import Sequence
+from typing import NoReturn
 
 from group_vault.crypto import MAX_SHARES, MIN_THRESHOLD, split_secret
 from group_vault.daemon import run_daemon
 from group_vault.storage import EncryptedShareStore
+from group_vault.terminal import show_status
+
+
+class CLIParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        show_status("REJECTED", message)
+        self.exit(1)
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="vault-cli")
+    parser = CLIParser(prog="vault-cli")
     commands = parser.add_subparsers(dest="command", required=True)
 
     init = commands.add_parser("init", help="Create a demo vault share set")
@@ -31,12 +40,17 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify-share", help="Check a stored share")
     verify.add_argument("--vault-id", required=True)
     verify.add_argument("--node-id", required=True)
-    start = commands.add_parser("start", help="Poll coordinator requests (observation only)")
+    start = commands.add_parser("start", help="Poll and authorize requests locally")
     start.add_argument("--node-id", required=True)
     start.add_argument("--coordinator", required=True)
     start.add_argument("--poll-interval", type=float, default=2.0)
     start.add_argument("--timeout", type=float, default=5.0)
     start.add_argument("--once", action="store_true", help="Poll once and exit")
+    mode = start.add_mutually_exclusive_group()
+    mode.add_argument("--auto-approve", action="store_true", help="Authorize without stdin")
+    mode.add_argument(
+        "--observe", action="store_true", help="Display requests without authorization"
+    )
     return parser
 
 
@@ -45,27 +59,27 @@ def _store_share(vault_id: str, node_id: str) -> int:
     try:
         share = base64.b64decode(encoded_share, validate=True)
     except ValueError:
-        print("Error: share must be valid Base64.", file=sys.stderr)
-        return 2
+        show_status("REJECTED", "Error: share must be valid Base64.")
+        return 1
     if not share:
-        print("Error: share must not be empty.", file=sys.stderr)
-        return 2
+        show_status("REJECTED", "Error: share must not be empty.")
+        return 1
 
     store = EncryptedShareStore()
     passphrase = getpass.getpass("Vault passphrase: ")
     if not passphrase:
-        print("Error: passphrase must not be empty.", file=sys.stderr)
-        return 2
+        show_status("REJECTED", "Error: passphrase must not be empty.")
+        return 1
     if not store.exists():
         confirmation = getpass.getpass("Confirm passphrase: ")
         if passphrase != confirmation:
-            print("Error: passphrases do not match.", file=sys.stderr)
-            return 2
+            show_status("REJECTED", "Error: passphrases do not match.")
+            return 1
 
     try:
         store.store_share(vault_id, node_id, share, passphrase)
     except (OSError, ValueError) as exc:
-        print(f"Error: could not store share: {exc}", file=sys.stderr)
+        show_status("REJECTED", f"Error: could not store share: {exc}")
         return 1
     print(f"Encrypted share saved for vault {vault_id}, node {node_id}.")
     return 0
@@ -77,23 +91,29 @@ def _verify_share(vault_id: str, node_id: str) -> int:
     try:
         share = store.load_share(vault_id, node_id, passphrase)
     except (OSError, ValueError) as exc:
-        print(f"Error: could not verify share: {exc}", file=sys.stderr)
+        show_status("REJECTED", f"Error: could not verify share: {exc}")
         return 1
     if not share:
-        print("Error: stored share is empty.", file=sys.stderr)
+        show_status("REJECTED", "Error: stored share is empty.")
         return 1
     print(f"Encrypted share verified for vault {vault_id}, node {node_id}.")
     return 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _run(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "start":
         try:
             return run_daemon(
-                args.coordinator, args.node_id, args.poll_interval, args.timeout, args.once
+                args.coordinator,
+                args.node_id,
+                args.poll_interval,
+                args.timeout,
+                args.once,
+                interactive=not args.observe,
+                auto_approve=args.auto_approve,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -130,7 +150,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _verify_share(args.vault_id, args.node_id)
 
     parser.error("unknown command")
-    return 2
+    return 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        return _run(argv)
+    except (EOFError, KeyboardInterrupt):
+        show_status("REJECTED", "Command cancelled")
+        return 1
+    except (OSError, ValueError) as exc:
+        show_status("REJECTED", str(exc))
+        return 1
 
 
 if __name__ == "__main__":
