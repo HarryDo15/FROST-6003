@@ -18,3 +18,5 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy group_vault
+      - run: rustup toolchain install 1.90.0 --profile minimal
+      - run: cargo +1.90.0 build --release --locked --manifest-path rust/frost_bridge/Cargo.toml

@@ -1,48 +1,84 @@
 import base64
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+
+MAX_MESSAGE_BYTES = 65_536
+Status = Literal["pending", "signing", "completed", "expired", "failed"]
+
+
+def _identifier(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must not be blank")
+    return value
 
 
 def _check_base64(value: str) -> str:
-    if not base64.b64decode(value, validate=True):
+    decoded = base64.b64decode(value, validate=True)
+    if not decoded:
         raise ValueError("must not be empty")
+    return base64.b64encode(decoded).decode("ascii")
+
+
+def _check_message(value: str) -> str:
+    if len(base64.b64decode(value)) > MAX_MESSAGE_BYTES:
+        raise ValueError("message exceeds 65536 bytes")
     return value
 
 
-Base64Str = Annotated[str, AfterValidator(_check_base64)]
-
-
-def _check_partial_signature(value: str) -> str:
-    if len(base64.b64decode(value, validate=True)) in (16, 32):
-        raise ValueError("payload has the size of a raw private key share")
+def _check_share(value: str) -> str:
+    if len(base64.b64decode(value)) != 32:
+        raise ValueError("signature share must contain 32 bytes")
     return value
 
 
-class SignatureRequest(BaseModel):
-    vault_id: str
-    payload_to_sign_base64: Base64Str
-    requested_by: str
+Identifier = Annotated[str, Field(min_length=1, max_length=128), AfterValidator(_identifier)]
+Base64Str = Annotated[str, Field(max_length=87_384), AfterValidator(_check_base64)]
+Message = Annotated[Base64Str, AfterValidator(_check_message)]
 
 
-class SignatureResponse(BaseModel):
-    request_id: str
-    status: str
+class APIModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class SignatureRequest(APIModel):
+    vault_id: Identifier
+    payload_to_sign_base64: Message
+    requested_by: Identifier
+
+
+class SignatureResponse(APIModel):
+    request_id: Identifier
+    status: Status
 
 
 class SignatureResult(SignatureResponse):
-    signature_base64: str | None = None
+    vault_id: Identifier
+    payload_to_sign_base64: Message
+    signature_base64: Base64Str | None = None
+    verified: bool = False
 
 
 class PendingRequest(SignatureRequest):
-    request_id: str
+    request_id: Identifier
+    status: Status
+    expires_at: float
+    commitments: dict[str, str] = Field(default_factory=dict)
 
 
-class PendingRequestsResponse(BaseModel):
+class PendingRequestsResponse(APIModel):
     requests: list[PendingRequest]
 
 
-class ShareSubmission(BaseModel):
-    request_id: str
-    node_id: str
-    partial_signature_base64: Annotated[Base64Str, AfterValidator(_check_partial_signature)]
+class CommitmentSubmission(APIModel):
+    request_id: Identifier
+    node_id: Identifier
+    commitment_base64: Annotated[Base64Str, Field(max_length=4096)]
+
+
+class ShareSubmission(APIModel):
+    request_id: Identifier
+    node_id: Identifier
+    partial_signature_base64: Annotated[
+        Base64Str, Field(max_length=44), AfterValidator(_check_share)
+    ]

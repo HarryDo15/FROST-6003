@@ -10,3 +10,6 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+.vault/
+.local-work/
+rust/frost_bridge/target/

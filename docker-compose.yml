@@ -1,0 +1,66 @@
+x-runtime: &runtime
+  image: group-vault
+  user: "${VAULT_UID:?Set VAULT_UID to id -u}:${VAULT_GID:?Set VAULT_GID to id -g}"
+
+x-node: &node
+  <<: *runtime
+  entrypoint: ["python", "-m", "group_vault.vault_cli"]
+  command: >-
+    start --config /config/config.json --passphrase-file /run/secrets/passphrase
+    --coordinator http://coordinator:8080 --allow-http --auto-approve
+  secrets: [passphrase]
+  depends_on:
+    coordinator:
+      condition: service_healthy
+
+services:
+  coordinator:
+    <<: *runtime
+    build: .
+    ports: ["127.0.0.1:${VAULT_PORT:-8080}:8080"]
+    volumes:
+      - ./.vault/setup/coordinator.json:/config/coordinator.json:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', 8080), 2).close()"
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  init:
+    <<: *runtime
+    profiles: [tools]
+    entrypoint: ["python", "-m", "group_vault.vault_cli"]
+    command: >-
+      init --total 3 --threshold 2 --output-dir /data/setup
+      --passphrase-file /run/secrets/passphrase
+    volumes: ["./.vault:/data"]
+    secrets: [passphrase]
+
+  node-1:
+    <<: *node
+    volumes: ["./.vault/setup/node-1:/config:ro"]
+
+  node-2:
+    <<: *node
+    volumes: ["./.vault/setup/node-2:/config:ro"]
+
+  node-3:
+    <<: *node
+    volumes: ["./.vault/setup/node-3:/config:ro"]
+
+  requester:
+    <<: *runtime
+    profiles: [tools]
+    entrypoint: ["python", "-m", "group_vault.vault_cli"]
+    command: >-
+      request --config /config/requester.json --message Hello --wait
+      --coordinator http://coordinator:8080 --allow-http
+    volumes: ["./.vault/setup/requester.json:/config/requester.json:ro"]
+
+secrets:
+  passphrase:
+    file: ./.vault/passphrase

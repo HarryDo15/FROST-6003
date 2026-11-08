@@ -1,166 +1,225 @@
-"""Command line tools for signer nodes."""
-
-from __future__ import annotations
-
 import argparse
 import base64
 import getpass
 import json
 import secrets
+import shutil
 import sys
+import time
 import uuid
 from collections.abc import Sequence
-from typing import NoReturn
+from pathlib import Path
 
-from group_vault.crypto import MAX_SHARES, MIN_THRESHOLD, split_secret
+from group_vault.client import CoordinatorClient, CoordinatorError
+from group_vault.config import (
+    CoordinatorConfig,
+    NodeConfig,
+    PublicVault,
+    RequesterConfig,
+    load_config,
+    token_hash,
+    write_config,
+)
 from group_vault.daemon import run_daemon
+from group_vault.frost import generate_keys, validate_key_package, verify
 from group_vault.storage import EncryptedShareStore
-from group_vault.terminal import show_status
 
 
-class CLIParser(argparse.ArgumentParser):
-    def error(self, message: str) -> NoReturn:
-        self.print_usage(sys.stderr)
-        show_status("REJECTED", message)
-        self.exit(1)
+def passphrase(path: Path | None, confirm: bool = False) -> str:
+    if path is not None:
+        if path.stat().st_mode & 0o077:
+            raise ValueError("passphrase file must be private: chmod 600 the file")
+        value = path.read_text().rstrip("\r\n")
+    else:
+        value = getpass.getpass("Vault passphrase: ")
+        if confirm and value != getpass.getpass("Confirm passphrase: "):
+            raise ValueError("passphrases do not match")
+    if not value:
+        raise ValueError("passphrase must not be empty")
+    return value
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = CLIParser(prog="vault-cli")
+def initialize(directory: Path, threshold: int, total: int, password: str) -> None:
+    if not 2 <= threshold <= total <= 255:
+        raise ValueError("require 2 <= threshold <= total <= 255")
+    if directory.exists():
+        raise ValueError("output directory already exists; choose a new directory")
+    keys = generate_keys(threshold, total)
+    vault = PublicVault(
+        vault_id=uuid.uuid4().hex,
+        threshold=threshold,
+        total=total,
+        public_key_package=keys["public_key_package"],
+        verifying_key=keys["verifying_key"],
+    )
+    requester_token = secrets.token_hex(32)
+    node_tokens = {str(i): secrets.token_hex(32) for i in range(1, total + 1)}
+    directory.mkdir(mode=0o700, parents=True)
+    try:
+        write_config(directory / "public.json", vault)
+        write_config(
+            directory / "requester.json", RequesterConfig(vault=vault, token=requester_token)
+        )
+        write_config(
+            directory / "coordinator.json",
+            CoordinatorConfig(
+                vault=vault,
+                requester_token_hash=token_hash(requester_token),
+                node_token_hashes={node: token_hash(token) for node, token in node_tokens.items()},
+            ),
+        )
+        for node_id, token in node_tokens.items():
+            node_dir = directory / f"node-{node_id}"
+            node_dir.mkdir(mode=0o700)
+            config = NodeConfig(vault=vault, node_id=node_id, token=token)
+            key_package = keys["key_packages"][node_id]
+            validate_key_package(key_package, node_id, vault.public_key_package)
+            EncryptedShareStore(node_dir / config.share_store).store_share(
+                vault.vault_id, node_id, base64.b64decode(key_package, validate=True), password
+            )
+            write_config(node_dir / "config.json", config)
+    except Exception:
+        shutil.rmtree(directory)
+        raise
+    print(f"Created {threshold}-of-{total} FROST vault in {directory}")
+
+
+def load_key(config_path: Path, config: NodeConfig, password: str) -> str:
+    key = EncryptedShareStore(config_path.parent / config.share_store).load_share(
+        config.vault.vault_id, config.node_id, password
+    )
+    encoded = base64.b64encode(key).decode()
+    validate_key_package(encoded, config.node_id, config.vault.public_key_package)
+    return encoded
+
+
+def _message(args: argparse.Namespace) -> bytes:
+    message: bytes = args.message_file.read_bytes() if args.message_file else args.message.encode()
+    if not 1 <= len(message) <= 65536:
+        raise ValueError("message must contain between 1 and 65536 bytes")
+    return message
+
+
+def show_result(
+    client: CoordinatorClient,
+    config: RequesterConfig,
+    request_id: str,
+    message: bytes,
+    wait: bool,
+) -> int:
+    deadline = time.monotonic() + 310
+    while True:
+        result = client.result(request_id)
+        if result.vault_id != config.vault.vault_id or result.request_id != request_id:
+            raise ValueError("result belongs to a different vault or request")
+        if base64.b64decode(result.payload_to_sign_base64, validate=True) != message:
+            raise ValueError("result does not match the requested message")
+        if result.status == "completed":
+            if not result.signature_base64 or not verify(
+                message, result.signature_base64, config.vault.public_key_package
+            ):
+                raise ValueError("signature verification failed")
+            print(json.dumps({**result.model_dump(), "verified": True}))
+            return 0
+        if result.status not in ("pending", "signing") or not wait:
+            print(result.model_dump_json())
+            return 2 if result.status in ("pending", "signing") else 1
+        if time.monotonic() >= deadline:
+            raise TimeoutError("request did not finish within 310 seconds")
+        time.sleep(0.5)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="vault-cli")
     commands = parser.add_subparsers(dest="command", required=True)
-
-    init = commands.add_parser("init", help="Create a demo vault share set")
+    init = commands.add_parser("init", help="Create a FROST vault using a trusted dealer")
     init.add_argument("--total", "-n", type=int, required=True)
     init.add_argument("--threshold", "-t", type=int, required=True)
-
-    store = commands.add_parser("store-share", help="Encrypt and save one node share")
-    store.add_argument("--vault-id", required=True)
-    store.add_argument("--node-id", required=True)
-
-    verify = commands.add_parser("verify-share", help="Check a stored share")
-    verify.add_argument("--vault-id", required=True)
-    verify.add_argument("--node-id", required=True)
-    start = commands.add_parser("start", help="Poll and authorize requests locally")
-    start.add_argument("--node-id", required=True)
-    start.add_argument("--coordinator", required=True)
-    start.add_argument("--poll-interval", type=float, default=2.0)
-    start.add_argument("--timeout", type=float, default=5.0)
-    start.add_argument("--once", action="store_true", help="Poll once and exit")
-    mode = start.add_mutually_exclusive_group()
-    mode.add_argument("--auto-approve", action="store_true", help="Authorize without stdin")
-    mode.add_argument(
-        "--observe", action="store_true", help="Display requests without authorization"
-    )
+    init.add_argument("--output-dir", type=Path, required=True)
+    init.add_argument("--passphrase-file", type=Path)
+    start = commands.add_parser("start", help="Approve and sign requests as one node")
+    start.add_argument("--config", type=Path, required=True)
+    start.add_argument("--passphrase-file", type=Path)
+    start.add_argument("--poll-interval", type=float, default=1.0)
+    start.add_argument("--once", action="store_true")
+    modes = start.add_mutually_exclusive_group()
+    modes.add_argument("--observe", action="store_true")
+    modes.add_argument("--auto-approve", action="store_true")
+    check = commands.add_parser("verify-share", help="Decrypt and validate a node's key package")
+    check.add_argument("--config", type=Path, required=True)
+    check.add_argument("--passphrase-file", type=Path)
+    for name in ("request", "result"):
+        command = commands.add_parser(name)
+        command.add_argument("--config", type=Path, required=True)
+        message = command.add_mutually_exclusive_group(required=True)
+        message.add_argument("--message")
+        message.add_argument("--message-file", type=Path)
+        command.add_argument("--wait", action="store_true")
+        if name == "request":
+            command.add_argument("--requested-by", default="local-user")
+        else:
+            command.add_argument("--request-id", required=True)
+    for command in (start, commands.choices["request"], commands.choices["result"]):
+        command.add_argument("--coordinator", default="http://127.0.0.1:8080")
+        command.add_argument("--timeout", type=float, default=5.0)
+        command.add_argument(
+            "--allow-http",
+            action="store_true",
+            help="Allow plain HTTP on a trusted private network",
+        )
     return parser
 
 
-def _store_share(vault_id: str, node_id: str) -> int:
-    encoded_share = getpass.getpass("Base64 share (input hidden): ").strip()
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
     try:
-        share = base64.b64decode(encoded_share, validate=True)
-    except ValueError:
-        show_status("REJECTED", "Error: share must be valid Base64.")
-        return 1
-    if not share:
-        show_status("REJECTED", "Error: share must not be empty.")
-        return 1
-
-    store = EncryptedShareStore()
-    passphrase = getpass.getpass("Vault passphrase: ")
-    if not passphrase:
-        show_status("REJECTED", "Error: passphrase must not be empty.")
-        return 1
-    if not store.exists():
-        confirmation = getpass.getpass("Confirm passphrase: ")
-        if passphrase != confirmation:
-            show_status("REJECTED", "Error: passphrases do not match.")
-            return 1
-
-    try:
-        store.store_share(vault_id, node_id, share, passphrase)
-    except (OSError, ValueError) as exc:
-        show_status("REJECTED", f"Error: could not store share: {exc}")
-        return 1
-    print(f"Encrypted share saved for vault {vault_id}, node {node_id}.")
-    return 0
-
-
-def _verify_share(vault_id: str, node_id: str) -> int:
-    store = EncryptedShareStore()
-    passphrase = getpass.getpass("Vault passphrase: ")
-    try:
-        share = store.load_share(vault_id, node_id, passphrase)
-    except (OSError, ValueError) as exc:
-        show_status("REJECTED", f"Error: could not verify share: {exc}")
-        return 1
-    if not share:
-        show_status("REJECTED", "Error: stored share is empty.")
-        return 1
-    print(f"Encrypted share verified for vault {vault_id}, node {node_id}.")
-    return 0
-
-
-def _run(argv: Sequence[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-
-    if args.command == "start":
-        try:
+        if args.command == "init":
+            initialize(
+                args.output_dir,
+                args.threshold,
+                args.total,
+                passphrase(args.passphrase_file, confirm=True),
+            )
+            return 0
+        if args.command in ("start", "verify-share"):
+            node = load_config(args.config, NodeConfig)
+            key = None
+            if args.command == "verify-share" or not args.observe:
+                key = load_key(args.config, node, passphrase(args.passphrase_file))
+            if args.command == "verify-share":
+                print("Encrypted FROST key package verified")
+                return 0
             return run_daemon(
                 args.coordinator,
-                args.node_id,
+                node,
+                key,
                 args.poll_interval,
                 args.timeout,
                 args.once,
                 interactive=not args.observe,
                 auto_approve=args.auto_approve,
+                allow_http=args.allow_http,
             )
-        except ValueError as exc:
-            parser.error(str(exc))
-
-    if args.command == "init":
-        if not MIN_THRESHOLD <= args.threshold <= args.total <= MAX_SHARES:
-            parser.error(f"require {MIN_THRESHOLD} <= threshold <= total <= {MAX_SHARES}")
-        demo_secret = secrets.token_bytes(32)
-        shares = split_secret(demo_secret, args.threshold, args.total)
-        result = {
-            "vault_id": str(uuid.uuid4()),
-            "total": args.total,
-            "threshold": args.threshold,
-            "shares": [
-                {
-                    "node_id": share[2],
-                    "share_base64": base64.b64encode(share).decode("ascii"),
-                }
-                for share in shares
-            ],
-        }
-        print(
-            "Warning: output contains sensitive demo shares; "
-            "do not use a real secret with this command.",
-            file=sys.stderr,
+        requester = load_config(args.config, RequesterConfig)
+        client = CoordinatorClient(
+            args.coordinator, requester.token, args.timeout, allow_http=args.allow_http
         )
-        print(json.dumps(result, indent=2))
-        return 0
-
-    if args.command == "store-share":
-        return _store_share(args.vault_id, args.node_id)
-
-    if args.command == "verify-share":
-        return _verify_share(args.vault_id, args.node_id)
-
-    parser.error("unknown command")
-    return 1
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    try:
-        return _run(argv)
-    except (EOFError, KeyboardInterrupt):
-        show_status("REJECTED", "Command cancelled")
+        message = _message(args)
+        if args.command == "request":
+            created = client.create_request(requester.vault.vault_id, message, args.requested_by)
+            if not args.wait:
+                print(created.model_dump_json())
+                return 0
+            request_id = created.request_id
+            print(f"Waiting for {request_id}", file=sys.stderr)
+        else:
+            request_id = args.request_id
+        return show_result(client, requester, request_id, message, args.wait)
+    except (OSError, ValueError, CoordinatorError) as exc:
+        print(f"vault-cli: {exc}", file=sys.stderr)
         return 1
-    except (OSError, ValueError) as exc:
-        show_status("REJECTED", str(exc))
+    except (EOFError, KeyboardInterrupt):
+        print("Command cancelled", file=sys.stderr)
         return 1
 
 
