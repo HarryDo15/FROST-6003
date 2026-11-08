@@ -3,12 +3,5 @@
 !uv.lock
 !group_vault/
 !group_vault/**/*.py
-!rust/
-!rust/frost_bridge/
-!rust/frost_bridge/Cargo.toml
-!rust/frost_bridge/Cargo.lock
-!rust/frost_bridge/src/
-!rust/frost_bridge/src/*.rs
-rust/frost_bridge/target/
 **/__pycache__/
 **/*.pyc

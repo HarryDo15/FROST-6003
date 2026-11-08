@@ -9,6 +9,7 @@ description = "Group vault using FROST Ed25519 threshold signatures"
 requires-python = ">=3.12"
 dependencies = [
     "pycryptodome>=3.24",
+    "pynacl>=1.6",
     "fastapi>=0.150",
     "uvicorn>=0.54",
     "argon2-cffi>=23",

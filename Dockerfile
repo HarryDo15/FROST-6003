@@ -1,8 +1,3 @@
-FROM rust:1.90-slim AS crypto
-WORKDIR /build
-COPY rust/frost_bridge/ ./
-RUN cargo build --release --locked
-
 FROM python:3.12-slim AS builder
 WORKDIR /app
 RUN pip install --no-cache-dir uv==0.13.6
@@ -16,7 +11,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
 WORKDIR /app
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin vault
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=crypto /build/target/release/frost-bridge /usr/local/bin/frost-bridge
 COPY group_vault ./group_vault
 USER vault
 EXPOSE 8080
