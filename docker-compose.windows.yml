@@ -1,0 +1,35 @@
+x-private-secret: &private-secret
+  entrypoint:
+    - python
+    - -c
+    - |
+      import os
+      import runpy
+      import shutil
+      import sys
+      import tempfile
+
+      with tempfile.TemporaryDirectory(prefix="vault-secret-") as directory:
+          private_path = os.path.join(directory, "passphrase")
+          descriptor = os.open(
+              private_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+          )
+          with os.fdopen(descriptor, "wb") as destination:
+              with open("/run/secrets/passphrase", "rb") as source:
+                  shutil.copyfileobj(source, destination)
+
+          arguments = sys.argv[1:]
+          position = arguments.index("--passphrase-file")
+          arguments[position + 1] = private_path
+          sys.argv = ["vault-cli", *arguments]
+          runpy.run_module("group_vault.vault_cli", run_name="__main__")
+
+services:
+  init:
+    <<: *private-secret
+  node-1:
+    <<: *private-secret
+  node-2:
+    <<: *private-secret
+  node-3:
+    <<: *private-secret
