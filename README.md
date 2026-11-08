@@ -1,6 +1,6 @@
 # Decentralized Group Vault
 
-Requires Docker running and Docker Compose installed.
+Requires Docker running and Docker Compose installed. On Windows, use Git Bash.
 
 From the project directory, run:
 
@@ -15,7 +15,7 @@ Send another message:
 
 ```sh
 export VAULT_UID=$(id -u) VAULT_GID=$(id -g)
-docker compose run --rm requester request \
+MSYS_NO_PATHCONV=1 docker compose run --rm requester request \
   --config /config/requester.json --message 'Another message' --wait \
   --coordinator http://coordinator:8080 --allow-http
 ```
