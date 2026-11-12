@@ -1,4 +1,4 @@
-# Decentralized Group Vault
+# Implementation of FROST Threshold Signatures
 
 Requires Docker running and Docker Compose installed. On Windows, use Git Bash.
 
